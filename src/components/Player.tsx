@@ -1,71 +1,62 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useRef, useState } from "react";
+import Image from "next/image";
 import { site } from "@/data/site";
+import Icon from "./Icons";
 
-const BARS = 56;
-const H = Array.from({ length: BARS }, (_, i) => +(0.25 + 0.75 * Math.abs(Math.sin(i * 1.3) * Math.cos(i * 0.37))).toFixed(2));
-const fmt = (s: number) => (!isFinite(s) || s < 0 ? "0:00" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
+type Ctx = { idx: number | null; playing: boolean; error: boolean; toggle: (i: number) => void };
+const PlayerCtx = createContext<Ctx>({ idx: null, playing: false, error: false, toggle: () => {} });
+export const usePlayer = () => useContext(PlayerCtx);
 
-export default function Player() {
+export function Eq({ className = "" }: { className?: string }) {
+  return (
+    <span className={`flex h-4 items-end gap-[3px] ${className}`} aria-hidden>
+      {[0, 1, 2, 3].map((i) => (
+        <span key={i} className="h-full w-[3px] rounded-full bg-gold" style={{ transformOrigin: "bottom", animation: `bar ${0.7 + i * 0.18}s ease-in-out ${i * 0.1}s infinite` }} />
+      ))}
+    </span>
+  );
+}
+
+export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const ref = useRef<HTMLAudioElement>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "missing">("loading");
+  const [idx, setIdx] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [cur, setCur] = useState(0);
-  const [dur, setDur] = useState(0);
-  const [vol, setVol] = useState(1);
+  const [error, setError] = useState(false);
+  const [muted, setMuted] = useState(false);
 
-  useEffect(() => {
+  const toggle = useCallback((i: number) => {
     const a = ref.current;
     if (!a) return;
-    if (a.error) setStatus("missing");
-    else if (a.readyState >= 1) { setDur(a.duration); setStatus("ready"); }
-  }, []);
-  useEffect(() => { if (ref.current) ref.current.volume = vol; }, [vol]);
+    if (idx === i && playing) { a.pause(); return; }
+    if (idx !== i) { a.src = site.songs[i].audio; a.currentTime = 0; setIdx(i); setError(false); }
+    a.play().catch(() => { setError(true); setPlaying(false); });
+  }, [idx, playing]);
 
-  const toggle = () => {
-    const a = ref.current;
-    if (!a || status !== "ready") return;
-    if (playing) a.pause(); else a.play().catch(() => setStatus("missing"));
-  };
-  const pct = dur ? cur / dur : 0;
-  const ok = status === "ready";
-
+  const song = idx === null ? null : site.songs[idx];
   return (
-    <div className="glow rounded-3xl border bg-white/[0.03] p-5 backdrop-blur md:p-8">
-      <audio ref={ref} src={site.track.src} preload="metadata"
-        onLoadedMetadata={(e) => { setDur(e.currentTarget.duration); setStatus("ready"); }}
-        onError={() => setStatus("missing")} onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
-        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
-      <div className="flex items-center gap-4">
-        <button onClick={toggle} disabled={!ok} aria-label={playing ? "Pause" : "Play"}
-          className="glow flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-neon text-void transition hover:bg-soft disabled:opacity-40">
-          {playing
-            ? <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor"><rect x="6" y="5" width="4" height="14" /><rect x="14" y="5" width="4" height="14" /></svg>
-            : <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>}
-        </button>
-        <div className="min-w-0">
-          <p className="truncate font-display text-xl font-bold">{site.track.title}</p>
-          <p className="truncate text-sm text-mute">{site.name}</p>
+    <PlayerCtx.Provider value={{ idx, playing, error, toggle }}>
+      {children}
+      <audio ref={ref} muted={muted} preload="none"
+        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
+        onError={() => { if (ref.current?.getAttribute("src")) { setError(true); setPlaying(false); } }}
+        onTimeUpdate={(e) => { const a = e.currentTarget; if (site.previewSeconds && a.currentTime >= site.previewSeconds) { a.pause(); a.currentTime = 0; } }} />
+      {song && idx !== null && (
+        <div className="fixed inset-x-3 bottom-3 z-40 mx-auto flex max-w-xl items-center gap-3 rounded-full border bg-void/80 p-2 pr-2.5 backdrop-blur-xl">
+          <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-full"><Image src={song.cover} alt="" fill sizes="44px" className="object-cover" /></div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm">{song.title}</p>
+            <p className="faint truncate !text-[10px]">{error ? "Add audio file" : song.album}</p>
+          </div>
+          {playing && <Eq />}
+          <button onClick={() => toggle(idx)} aria-label={playing ? "Pause" : "Play"} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gold text-void">
+            <Icon name={playing ? "pause" : "play"} className="h-5 w-5" />
+          </button>
+          <button onClick={() => setMuted(!muted)} aria-label={muted ? "Unmute" : "Mute"} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-ink">
+            <Icon name={muted ? "mute" : "volume"} className="h-5 w-5" />
+          </button>
         </div>
-      </div>
-      <div className="relative mt-6 flex h-20 items-end gap-[3px]" aria-hidden={!ok}>
-        {H.map((h, i) => (
-          <span key={i} className={`flex-1 rounded-full ${i / BARS < pct ? "bg-neon" : "bg-neon/25"}`}
-            style={{ height: `${h * 100}%`, transformOrigin: "bottom", animation: playing ? `bar ${0.9 + (i % 5) * 0.15}s ease-in-out ${i * 0.03}s infinite` : undefined }} />
-        ))}
-        <input type="range" min={0} max={dur || 1} step={0.1} value={cur} disabled={!ok} aria-label="Seek"
-          onChange={(e) => { if (ref.current) ref.current.currentTime = +e.target.value; }}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
-      </div>
-      <div className="mt-3 flex items-center justify-between text-xs text-mute">
-        <span>{fmt(cur)}</span>
-        {status === "missing" && <span className="px-3 text-center text-soft">No track loaded yet. Add public/audio/featured-track.mp3</span>}
-        {status === "loading" && <span>Loading…</span>}
-        <span>{fmt(dur)}</span>
-      </div>
-      <label className="mt-4 hidden items-center gap-3 text-xs text-mute sm:flex">Volume
-        <input type="range" min={0} max={1} step={0.05} value={vol} onChange={(e) => setVol(+e.target.value)} className="vol w-28" aria-label="Volume" />
-      </label>
-    </div>
+      )}
+    </PlayerCtx.Provider>
   );
 }
